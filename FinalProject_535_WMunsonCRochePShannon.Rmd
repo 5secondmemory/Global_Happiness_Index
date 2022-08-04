@@ -1,0 +1,645 @@
+---
+title: "Final Project - STAT 535"
+author: "William Munson, Carter Roche, Paul Shannon"
+date: "12/15/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE, cache=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Abstract
+
+## Title
+
+An investigation into the impact of Education, Government, and Public Health on Happiness Index
+
+
+## Team Members
+
+William Munson, Carter Roche, Paul Shannon
+
+
+## Objectives and Interests
+
+The objective of our investigation is to understand the impact that different societal concepts have on overall happiness. We decided to look at Education, Government, and Public Health. To represent these concepts, we have identified literacy rate (Education), corruption perception index (Government), and life expectancy (Public Health).
+
+Our hypothesis is that Education has the greatest overall impact on happiness. In addition to testing this hypothesis, we are investigating if there is correlation between any of our factors to get a fuller picture of the analysis.
+
+Using the result of our study, we aim to identify a direction for countries that do not score as well to invest in areas that yield the greatest impact to Happiness Index.
+
+
+## Description of Methods
+
+First, we will scrape Happiness Index data from the online database for the World Happiness Report as our main data set. In addition to the Happiness Index data, we will add data on literacy rate, transparency index, and life expectancy as factors that could impact Happiness Index.
+
+Using this data, we will create histograms and perform an MLE analysis to determine if our factors are normally distributed.
+
+Next, three simple linear regressions will be performed on the three factors to identify coefficients of the linear model. We will bootstrap to create distributions for the coefficients of our model and build confidence intervals to support our results.
+
+
+## Class Material to be Used for Analysis
+
+- Web Scraping
+- Data Visualization
+- Maximum Likelihood Estimation (MLE)
+- Bootstrap Technique
+
+## Description of Responsibilities
+
+- Web Scraping: Carter Roche
+- MLE Analysis: Paul Shannon
+- Bootstrapping: William Munson
+- Rmarkdown Presentation: All
+
+## Conclusion
+(TBD)
+
+
+# Report
+
+## Libraries
+
+```{r}
+library(stringr)
+library(tidyverse)
+```
+
+## Sources
+
+2021 Happiness Report: https://worldpopulationreview.com/country-rankings/happiest-countries-in-the-world
+
+
+## Web Scraping
+
+```{r}
+happiness_raw <- readLines("C:/Users/wmuns/Downloads/happiest-countries-in-the-world", warn = FALSE)
+```
+
+```{r}
+happiness_raw <- happiness_raw[grep("</div></div></div></div><div", happiness_raw)]
+happiness <- data.frame(str_split(happiness_raw, "\\{\"Place\":"))
+happiness <- data.frame(happiness[-c(1), ])
+```
+
+```{r}
+getHappinessField <- function(field, dat, type_of_result = "chr"){
+
+  pat <- paste( "(?<=", field, "\\\":)(.*?)(?=,|})" ,
+                sep = "")
+  
+  match <- gregexpr(pat, dat[[1]], perl = TRUE) # creates list of data that matches pattern
+  matches <- regmatches(dat[[1]], match) # extracts matches to character vector
+  
+  if(type_of_result == "num"){
+    matches <- as.numeric(matches)
+  } # converts result to numeric vector
+  
+  else{
+    matches <- gsub("[[:punct:]]", "", matches)
+    matches <- as.character(matches)
+  } # converts result to character vector
+  
+  return(matches)
+}
+```
+
+```{r}
+fields_happiness <- c("country", "subregion", "area", "pop2021", "Rank", "GrowthRate", "Density", "happiness2021", "happiness2020", "rank")
+
+cols <- length(fields_happiness)
+rows <- as.numeric(count(happiness))
+
+db <- data.frame(matrix(nrow = rows, ncol = cols))
+
+db$Country <- getHappinessField(fields_happiness[1],
+                    happiness,
+                    )
+
+db$Region <- getHappinessField(fields_happiness[2],
+                    happiness,
+                    )
+
+db$Area <- getHappinessField(fields_happiness[3],
+                    happiness,
+                    "num"
+                    )
+
+db$Pop2021 <- getHappinessField(fields_happiness[4],
+                    happiness,
+                    "num"
+                    )
+
+db$PopRank <- getHappinessField(fields_happiness[5],
+                    happiness,
+                    "num"
+                    )
+
+db$PopGrowthRate <- getHappinessField(fields_happiness[6],
+                    happiness,
+                    "num"
+                    )
+
+db$PopDensity <- getHappinessField(fields_happiness[7],
+                    happiness,
+                    "num"
+                    )
+
+db$Happiness2021 <- getHappinessField(fields_happiness[8],
+                    happiness,
+                    "num"
+                    )
+
+db$Happiness2020 <- getHappinessField(fields_happiness[9],
+                    happiness,
+                    "num"
+                    )
+
+db$HappinessRank <- getHappinessField(fields_happiness[10],
+                    happiness,
+                    "num"
+                    )
+
+```
+
+## Adding Data to Happiness Index Dataframe
+
+Import .csv files for literacy rate, corruption index, and life expectancy.
+```{r}
+#Literacy Rate
+literacy <- read.csv("C:/Users/wmuns/Downloads/literacy_rate.csv")
+
+#Corruption Perception Index (CPI)
+corruption <- read.csv("C:/Users/wmuns/Downloads/CPI_2019_final_dataset.csv")
+
+#Life Expectancy
+life_expectancy <- read.csv("C:/Users/wmuns/Downloads/lifeExpectancy_world.csv")
+```
+
+Merge data frames into one dataset.
+```{r}
+db <- merge(db, literacy, by.x = "Country", by.y = "country")
+db <- merge(db, corruption, by = "Country")
+db <- merge(db, life_expectancy, by.x = "Country", by.y = "Entity")
+```
+
+
+# Paul's Regression Section
+
+## A Regression of Literacy Rate on Happiness.
+
+We will run a simple regression 1 variable at a time to examine how literacy, corruption and life expectancy are linearly related to happiness. 
+
+Lets begin by regressing the overall literacy rate against happiness. Before performing the actual calculations, a scatter plot can be informative. 
+
+```{r, echo = T}
+
+plot(x = db$literacy_rate_percent_all, y = db$Happiness2021)
+```
+
+Based on visual observation alone, it looks as though literacy might only have a slightly positive linear effect on happiness, or even no effect at all. Now lets examine this with some actual calculations assuming a simple linear model. First, I will use the error function developed in lecture 8 to find a b0 and b1 which produces a line of best fit. 
+
+```{r, echo = T}
+
+db <- db %>% mutate(literacy_rate_percent_all = as.integer(literacy_rate_percent_all))
+
+MSE_regression <- function(b, Y = db$happiness2021, X = db$literacy_rate_percent_all){
+  return(mean((Y - (b[1] + b[2] * X))^2))
+}
+
+error <- function(b){
+  MSE_regression(b,
+    X = db$literacy_rate_percent_all,
+    Y = db$Happiness2020)}
+
+b <- c(4,4)
+
+optim(b, error)$par
+
+```
+Compare this method to R's simple linear regression capabilities:
+
+```{r, echo = T}
+
+coef(lm(Happiness2021 ~ literacy_rate_percent_all, data = db))
+
+
+```
+
+Ok, now lets try bootstrapping the Beta's for this distribution. 
+
+
+```{r, echo = T}
+#first, I will slightly change the error function 
+
+
+error_bstp <- function(b){
+  MSE_regression(b,
+    X = bstp$literacy_rate_percent_all,
+    Y = bstp$Happiness2021)}
+
+
+
+b0 <- c(1,1)
+
+
+
+n <- nrow(db)
+M <- 10000
+b0_bstp_sample_literacy <- numeric(M)
+b1_bstp_sample_literacy <- numeric(M)
+for (m in 1:M) {
+  bootstrap_sample_idx <- sample(n, replace = TRUE)
+  bstp <- db[bootstrap_sample_idx, ]
+  beta_regression <- optim(b0, error_bstp)$par
+  b0_bstp_sample_literacy[m] <- beta_regression[1]
+  b1_bstp_sample_literacy[m] <- beta_regression[2]}
+
+
+bootstrap_frame_literacy <- data.frame(b0_bstp_sample_literacy, b1_bstp_sample_literacy)
+
+mean_bstp_literacy_b0 <- mean(bootstrap_frame_literacy$b0)
+print(mean_bstp_literacy_b0)
+sd_bstp_literacy_b0 <- sd(bootstrap_frame_literacy$b0)
+print(sd_bstp_literacy_b0)
+
+mean_bstp_literacy_b1 <- mean(bootstrap_frame_literacy$b1)
+sd_bstp_literacy_b1 <- sd(bootstrap_frame_literacy$b1)
+print(mean_bstp_literacy_b1)
+print(sd_bstp_literacy_b1)
+
+
+```
+
+Now that I have a bootstrap frame, I can calculate a confidence interval around b0 and b1 respectively. I will do this as was done in lecture. 
+
+```{r, echo = T}
+
+alpha <- 0.05
+bootstrap_CI_literacy_b0 <- quantile(bootstrap_frame_literacy$b0_bstp_sample, c(alpha/2, 1 - alpha/2))
+print(bootstrap_CI_literacy_b0)
+bootstrap_CI_literacy_b1 <- quantile(bootstrap_frame_literacy$b1_bstp_sample, c(alpha/2, 1 - alpha/2))
+print(bootstrap_CI_literacy_b1)
+```
+
+the bootstrapped distribution of b0 and b1 look plotted.  Recall, these are the beta's from a simple linear regression performed between the happiness variable and the literacy rate.
+
+below is the b0 statistic of interest:
+
+```{r, echo = T}
+plt <- 
+    ggplot(data.frame(x = bootstrap_frame_literacy$b0_bstp_sample_literacy)) +
+    geom_histogram(aes(x = x, y = ..density..), color = "white")
+
+plt + geom_vline(xintercept = bootstrap_CI_literacy_b0, col = "blue")
+```
+
+
+Now, lets see an image of the bootstrap distribution for b1 when we examine the linear relationship between literacy rates and happiness. 
+
+```{r, echo = T}
+plt <- 
+    ggplot(data.frame(x = bootstrap_frame_literacy$b1_bstp_sample_literacy)) +
+    geom_histogram(aes(x = x, y = ..density..), color = "white")
+
+plt + geom_vline(xintercept = bootstrap_CI_literacy_b1, col = "blue")
+```
+
+Although 0 isn't in the confidence interval, the values remaining within the range are all very close to 0, showing that there is no real impact (from a linear standpoint) of literacy on happiness. 
+
+
+## A Regression between life expectancy and happiness. 
+
+I will perform an identical analysis, regression, and bootstrap calculation as performed in the previous section:
+
+```{r, echo = T}
+
+db <- db %>% mutate(X2019 = as.integer(X2019))
+
+MSE_regression <- function(b, Y = db$happiness2021, X = db$X2019){
+  return(mean((Y - (b[1] + b[2] * X))^2))
+}
+
+error <- function(b){
+  MSE_regression(b,
+    X = db$X2019,
+    Y = db$Happiness2021)}
+
+b <- c(4,4)
+
+optim(b, error)$par
+
+```
+
+```{r, echo = T}
+#first, I will slightly change the error function 
+
+
+error_bstp <- function(b){
+  MSE_regression(b,
+    X = bstp$X2019,
+    Y = bstp$Happiness2021)}
+
+
+
+b0 <- c(1,1)
+
+
+
+n <- nrow(db)
+M <- 10000
+b0_bstp_sample_life <- numeric(M)
+b1_bstp_sample_life <- numeric(M)
+for (m in 1:M) {
+  bootstrap_sample_idx <- sample(n, replace = TRUE)
+  bstp <- db[bootstrap_sample_idx, ]
+  beta_regression <- optim(b0, error_bstp)$par
+  b0_bstp_sample_life[m] <- beta_regression[1]
+  b1_bstp_sample_life[m] <- beta_regression[2]}
+
+
+bootstrap_frame_life <- data.frame(b0_bstp_sample_life, b1_bstp_sample_life)
+
+mean_bstp_life_b0 <- mean(bootstrap_frame_life$b0)
+print(mean_bstp_life_b0)
+sd_bstp_life_b0 <- sd(bootstrap_frame_life$b0)
+print(sd_bstp_life_b0)
+
+mean_bstp_life_b1 <- mean(bootstrap_frame_life$b1)
+sd_bstp_life_b1 <- sd(bootstrap_frame_life$b1)
+print(mean_bstp_life_b1)
+print(sd_bstp_life_b1)
+```
+
+Now that I have a bootstrap frame, I can calculate a confidence interval around b0 and b1 respectively. I will do this as was done in lecture. 
+
+```{r, echo = T}
+
+alpha <- 0.05
+bootstrap_CI_life_b0 <- quantile(bootstrap_frame_life$b0_bstp_sample, c(alpha/2, 1 - alpha/2))
+print(bootstrap_CI_life_b0)
+bootstrap_CI_life_b1 <- quantile(bootstrap_frame_life$b1_bstp_sample, c(alpha/2, 1 - alpha/2))
+print(bootstrap_CI_life_b1)
+```
+
+
+below is the b0 statistic of interest:
+
+```{r, echo = T}
+plt <- 
+    ggplot(data.frame(x = bootstrap_frame_life$b0_bstp_sample_life)) +
+    geom_histogram(aes(x = x, y = ..density..), color = "white")
+
+plt + geom_vline(xintercept = bootstrap_CI_life_b0, col = "blue")
+```
+
+
+Now, lets see an image of the bootstrap distribution for b1 when we examine the linear relationship between literacy rates and happiness. 
+
+```{r, echo = T}
+plt <- 
+    ggplot(data.frame(x = bootstrap_frame_life$b1_bstp_sample_life)) +
+    geom_histogram(aes(x = x, y = ..density..), color = "white")
+
+plt + geom_vline(xintercept = bootstrap_CI_life_b1, col = "blue")
+```
+
+## A Corruption analysis:
+
+Finally, lets examine this analysis with the CPI index values:
+
+```{r, echo = T}
+
+db <- db %>% mutate(CPI.score.2019 = as.integer(CPI.score.2019))
+
+MSE_regression <- function(b, Y = db$happiness2021, X = db$CPI.score.2019){
+  return(mean((Y - (b[1] + b[2] * X))^2))
+}
+
+error <- function(b){
+  MSE_regression(b,
+    X = db$CPI.score.2019,
+    Y = db$Happiness2021)}
+
+b <- c(4,4)
+
+optim(b, error)$par
+
+
+b1_CPI_non_bstp <- optim(b, error)$par[2]
+
+```
+
+```{r, echo = T}
+#first, I will slightly change the error function 
+
+
+error_bstp <- function(b){
+  MSE_regression(b,
+    X = bstp$CPI.score.2019,
+    Y = bstp$Happiness2021)}
+
+
+
+b0 <- c(1,1)
+
+
+
+n <- nrow(db)
+M <- 10000
+b0_bstp_sample_CPI <- numeric(M)
+b1_bstp_sample_CPI <- numeric(M)
+for (m in 1:M) {
+  bootstrap_sample_idx <- sample(n, replace = TRUE)
+  bstp <- db[bootstrap_sample_idx, ]
+  beta_regression <- optim(b0, error_bstp)$par
+  b0_bstp_sample_CPI[m] <- beta_regression[1]
+  b1_bstp_sample_CPI[m] <- beta_regression[2]}
+
+
+bootstrap_frame_CPI <- data.frame(b0_bstp_sample_CPI, b1_bstp_sample_CPI)
+
+mean_bstp_CPI_b0 <- mean(bootstrap_frame_CPI$b0)
+print(mean_bstp_CPI_b0)
+sd_bstp_CPI_b0 <- sd(bootstrap_frame_CPI$b0)
+print(sd_bstp_CPI_b0)
+
+mean_bstp_CPI_b1 <- mean(bootstrap_frame_CPI$b1)
+sd_bstp_CPI_b1 <- sd(bootstrap_frame_CPI$b1)
+print(mean_bstp_CPI_b1)
+print(sd_bstp_CPI_b1)
+
+
+```
+
+Now that I have a bootstrap frame, I can calculate a confidence interval around b0 and b1 respectively. I will do this as was done in lecture. 
+
+```{r, echo = T}
+
+alpha <- 0.05
+bootstrap_CI_CPI_b0 <- quantile(bootstrap_frame_CPI$b0_bstp_sample, c(alpha/2, 1 - alpha/2))
+print(bootstrap_CI_CPI_b0)
+bootstrap_CI_CPI_b1 <- quantile(bootstrap_frame_CPI$b1_bstp_sample, c(alpha/2, 1 - alpha/2))
+print(bootstrap_CI_CPI_b1)
+```
+
+
+below is the b0 statistic of interest:
+
+```{r, echo = T}
+plt <- 
+    ggplot(data.frame(x = bootstrap_frame_CPI$b0_bstp_sample_CPI)) +
+    geom_histogram(aes(x = x, y = ..density..), color = "white")
+
+plt + geom_vline(xintercept = bootstrap_CI_CPI_b0, col = "blue")
+```
+
+
+Now, lets see an image of the bootstrap distribution for b1 when we examine the linear relationship between literacy rates and happiness. 
+
+```{r, echo = T}
+plt <- 
+    ggplot(data.frame(x = bootstrap_frame_CPI$b1_bstp_sample_CPI)) +
+    geom_histogram(aes(x = x, y = ..density..), color = "white")
+
+plt + geom_vline(xintercept = bootstrap_CI_CPI_b1, col = "blue")
+```
+
+
+## A t-test on Beta 1
+
+Typically a linear regression is accompanied by a T-test, which will help determine if the Beta 1 values are significantly different from 0, or in other words, if a simple linear regression is significantly different from the null model. For brevity, we will perform 1 t-test here on the CPI variable. 
+
+if the p value is less than the alpha value, than it should reject the null hypothesis, if it is greater than the alpha value it should accept the null.  I will designate rejection as "True" and rejection as "False"
+
+```{r, echo = T}
+alpha <- .05
+
+db_t_test <- function(Y,X){
+t_test_ <- lm(Y ~ X)
+p_value <- summary(t_test_)$coefficients[2,4]
+return(p_value < alpha)}
+
+db_t_test(Y = db$Happiness2021, X = db$CPI.score.2019)
+
+```
+
+It looks like in this case, we can reject the null hypothesis that B1 = 0.  
+
+R-Squared Values for Linear Regressions
+
+```{r, eval = T}
+summary(lm(Happiness2021 ~ X2019, data = db))$r.squared
+```
+```{r, eval = T}
+summary(lm(Happiness2021 ~ literacy_rate_percent_all, data = db))$r.squared
+```
+```{r, eval = T}
+summary(lm(Happiness2021 ~ CPI.score.2019, data = db))$r.squared
+```
+- R-Squared values for life expectancy, literacy rate, and CPI are 0.485, 0.317, and 0.224 respectively.
+- This indicates that life expectancy has the strongest linear relationship to Happiness Index.
+
+
+# Will's section on the fit on variables and the power-curve for the Beta 1 T-test.
+
+```{r}
+library(numDeriv) 
+gamma.neg_log_lik <- function(params, data){
+  return(-sum(dgamma(data, shape = params[1], scale = params[2], log=TRUE)))
+}
+theta0 <- c(7.721275, 4.925933)
+
+
+optim(theta0, gamma.neg_log_lik, data = db$CPI.score.2019)
+```
+
+
+```{r}
+
+hist(db$CPI.score.2019, freq = FALSE)
+abline(v = mean(db$CPI.score.2019), col = "brown")
+curve(dgamma(x, shape = 8.155017, scale = 4.663853), add = TRUE)
+
+
+```
+
+
+## A t-test on Beta 1
+
+Typically a linear regression is accompanied by a T-test, which will help determine if the Beta 1 values are significantly different from 0, or in other words, if a simple linear regression is significantly different from the null model. For brevity, we will perform 1 t-test here on the CPI variable. 
+
+if the p value is less than the alpha value, than it should reject the null hypothesis, if it is greater than the alpha value it should accept the null.  I will designate rejection as "True" and rejection as "False"
+
+```{r, echo = T}
+alpha <- .05
+
+db_t_test <- function(Y,X){
+t_test_ <- lm(Y ~ X)
+p_value <- summary(t_test_)$coefficients[2,4]
+return(p_value < alpha)}
+
+db_t_test(Y = db$Happiness2021, X = db$CPI.score.2019)
+
+```
+- Result of t-Test for CPI b1 is `TRUE` which indicates that we can reject the null hypothesis that b1 = 0.
+- This means that the CPI b1 value has statistically significant impact on happiness index.
+
+
+
+
+
+
+
+```{r, echo = T}
+## lets examine a power-test
+Power_function <- function(B1, B0 = 4.08){
+  sample <- rgamma(116, shape = 8.155017, scale = 4.663853)
+  X <- db$CPI.score.2019
+  Y <- X*B1 + B0 + sample
+  power_df <- data.frame(Y,X)
+  db_t_test(power_df$Y, power_df$X)}
+
+
+Power_function(B1 = 0)
+Power_estimation_function <- function(B1, S){
+  sum(as.integer(replicate(S,Power_function(B1 = B1))))/S}
+Power_estimation_function_vec <- Vectorize(Power_estimation_function)
+
+x <- seq(-2,2,.2)
+
+power<- Power_estimation_function_vec(B1 = x, S = 500)
+plot(x = x, y = power, type = "p", col = "red", pch = 19)
+curve(Power_estimation_function_vec(B1 = x, S = 500), from = -2, to = 2)
+segments(x0 = 0, y0 = 0, x1 = 0, y1 = 1, col = "blue", lty = 5, add = TRUE)
+segments(x0 = -2, y0 = alpha, x1 = 2, y1 = alpha, col = "blue", lty = 5, add = TRUE)
+```
+
+
+
+
+
+Power Curve for CPI b1 t-Test
+
+
+- Run power study on CPI variable to examine if non-normal distribution impacts t-test results from linear regression
+- Power curve is symmetrical and power level is close to alpha at b1 value of 0, which indicates a reliable t-Test.
+- This demonstrates that the CPI variable is still valid for use in the linear regression analysis.
+
+
+Conclusions
+
+- Life expectancy had the linear model with the largest R-squared value and clear positive slope.
+- This suggests the life expectancy model has the best predictive trend for happiness index.
+- Based on overall research objective, countries looking to improve their happiness index should invest in Public Health programs.
+- Global organizations like the World Health Organization could support developing nations with Public Health initiatives.
+- Recommend further study for deeper dive into impact of different types of Public Health programs.
+
+
+Sources
+
+- https://worldpopulationreview.com/country-rankings/happiest-countries-in-the-world
+- https://www.who.int/data/gho/data/themes/topics/indicator-groups/indicator-group-details/GHO/life-expectancy-and-healthy-life-expectancy
+- https://www.transparency.org/en/cpi/2019/index/
+- https://worldpopulationreview.com/country-rankings/literacy-rate-by-country
